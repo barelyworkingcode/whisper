@@ -1,5 +1,5 @@
 #!/bin/bash
-# Wrapper that activates the conda env and supervises the Whisper STT daemon.
+# Wrapper that activates the conda env and supervises the relaySTT daemon.
 
 # Activate conda environment
 CONDA_BASE="$(conda info --base)"
@@ -7,6 +7,11 @@ source "${CONDA_BASE}/bin/activate" relaystt
 
 # Directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Line-buffer the daemon's stdout/stderr so operational logs (engine mode, model
+# load, errors) reach Relay's logfile promptly instead of sitting in a block
+# buffer for the life of a long-running process. Mirrors relayTTS's wrapper.
+export PYTHONUNBUFFERED=1
 
 # Restart-on-crash supervision (mirrors the Kokoro TTS daemon).
 #
