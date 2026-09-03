@@ -14,17 +14,148 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
+import uuid
 import warnings
 
 warnings.filterwarnings("ignore")
 
 
+
+class RemoteEngine:
+    """Transcription over HTTP against an OpenAI-compatible
+    /v1/audio/transcriptions server.
+
+    When enabled the daemon loads no model at all — no mlx-whisper import, no
+    weights, no gen_lock to serialize. It keeps everything else: the payload
+    guards, the ffmpeg conversion to 16 kHz mono, the duration probe, and the
+    byte-identical TCP protocol on 9998. Only the model call moves. That lets
+    the daemon run somewhere too small to hold the weights (a VM) while a host
+    with the GPU does the work, with no change on the client side.
+
+    If a router fronts the inference server, point base_url at the router: it
+    can hold the upstream credential, so no secret has to live beside the
+    daemon. api_key_env names the variable to read when the endpoint does
+    authenticate — the token itself is never a command-line argument, where it
+    would be visible in the process list.
+    """
+
+    def __init__(self, base_url=None, model=None, api_key_env=None, timeout=120.0):
+        self.base_url = (os.environ.get("WHISPER_REMOTE_URL") or base_url or "").rstrip("/")
+        # A URL is the whole switch: there is no separate enable flag to get out
+        # of sync with it.
+        self.enabled = bool(self.base_url)
+        self.model = os.environ.get("WHISPER_REMOTE_MODEL") or model or ""
+        self.timeout = timeout
+        self.api_key = os.environ.get(api_key_env or "WHISPER_REMOTE_API_KEY") or None
+
+        if self.enabled and not self.model:
+            raise ValueError(
+                "remote mode needs a model id: pass --remote-model or set "
+                "WHISPER_REMOTE_MODEL to the id the remote server exposes")
+
+    @property
+    def url(self):
+        return f"{self.base_url}/audio/transcriptions"
+
+    @property
+    def label(self):
+        """Endpoint identity for logs and errors — never includes the token."""
+        return self.base_url or "<unset>"
+
+    @staticmethod
+    def _error_detail(body):
+        """Pull a human message out of an error body, whatever shape it is."""
+        text = (body or b"")[:400].decode("utf-8", "replace").strip()
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            return text
+        if isinstance(parsed, dict):
+            err = parsed.get("error")
+            if isinstance(err, dict):
+                return str(err.get("message") or err)
+            if err:
+                return str(err)
+            if parsed.get("detail"):
+                return str(parsed["detail"])
+        return text
+
+    @staticmethod
+    def _encode_multipart(fields, filename, audio):
+        """Build a multipart/form-data body. Written out by hand because the
+        standard library has no client-side encoder and the alternative is
+        taking a dependency purely to format a few headers."""
+        boundary = uuid.uuid4().hex
+        out = bytearray()
+        for name, value in fields.items():
+            if value is None:
+                continue
+            out += f"--{boundary}\r\n".encode()
+            out += f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
+            out += f"{value}\r\n".encode()
+        out += f"--{boundary}\r\n".encode()
+        out += (f'Content-Disposition: form-data; name="file"; '
+                f'filename="{filename}"\r\n').encode()
+        out += b"Content-Type: audio/wav\r\n\r\n"
+        out += audio
+        out += f"\r\n--{boundary}--\r\n".encode()
+        return bytes(out), f"multipart/form-data; boundary={boundary}"
+
+    def transcribe(self, wav_path, language=None):
+        """Send one clip and return {text, language}. Raises RuntimeError with
+        the endpoint and reason on any failure, so the caller can answer the
+        client with something actionable instead of a stack trace."""
+        with open(wav_path, "rb") as f:
+            audio = f.read()
+
+        fields = {"model": self.model}
+        if language:
+            fields["language"] = language
+        body, content_type = self._encode_multipart(
+            fields, os.path.basename(wav_path), audio)
+
+        req = urllib.request.Request(
+            self.url, data=body, method="POST",
+            headers={"Content-Type": content_type})
+        if self.api_key:
+            req.add_header("Authorization", f"Bearer {self.api_key}")
+
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                payload = resp.read()
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(
+                f"remote STT {self.label} returned HTTP {e.code}: "
+                f"{self._error_detail(e.read())}") from None
+        except urllib.error.URLError as e:
+            raise RuntimeError(
+                f"remote STT {self.label} unreachable: {e.reason}") from None
+
+        try:
+            result = json.loads(payload)
+        except ValueError:
+            raise RuntimeError(
+                f"remote STT {self.label} returned {len(payload)} bytes that "
+                f"are not JSON") from None
+        if not isinstance(result, dict) or "text" not in result:
+            raise RuntimeError(
+                f"remote STT {self.label} response has no text field: "
+                f"{str(result)[:200]}")
+        return result
+
+
 class WhisperDaemon:
-    def __init__(self, host="localhost", port=9998, idle_timeout=900, model="mlx-community/whisper-large-v3-turbo"):
+    def __init__(self, host="localhost", port=9998, idle_timeout=900,
+                 model="mlx-community/whisper-large-v3-turbo", remote=None):
         self.host = host
         self.port = port
         self.model_name = model
         self.model = None
+        # Remote inference. Disabled unless a URL is configured, in which case
+        # model_name above goes unused and nothing is ever loaded.
+        self.remote = remote or RemoteEngine()
         self.running = False
         self.sock = None
         self.idle_timeout = idle_timeout
@@ -129,16 +260,21 @@ class WhisperDaemon:
             if duration <= 0:
                 return self._empty_result(language)
 
-            kwargs = {"path_or_hf_repo": self.model_name}
-            if language:
-                kwargs["language"] = language
-
             t0 = time.time()
-            # Serialize model access process-wide (see self.gen_lock). Global
-            # across connections, which per-client request chaining can't be —
-            # don't "optimize" it away.
-            with self.gen_lock:
-                result = self.mlx_whisper.transcribe(wav_path, **kwargs)
+            if self.remote.enabled:
+                # No model here, so no lock: the remote server serializes its
+                # own access and concurrent clips can be in flight at once.
+                result = self.remote.transcribe(wav_path, language)
+            else:
+                kwargs = {"path_or_hf_repo": self.model_name}
+                if language:
+                    kwargs["language"] = language
+
+                # Serialize model access process-wide (see self.gen_lock).
+                # Global across connections, which per-client request chaining
+                # can't be — don't "optimize" it away.
+                with self.gen_lock:
+                    result = self.mlx_whisper.transcribe(wav_path, **kwargs)
             transcription_time = time.time() - t0
 
             text = result.get("text", "").strip()
@@ -262,7 +398,13 @@ class WhisperDaemon:
     # -- Server lifecycle --
 
     def start(self):
-        if not self.load_model():
+        if self.remote.enabled:
+            # Nothing to load: no mlx-whisper import, no weights. A bad endpoint
+            # surfaces per-request rather than blocking startup, so the daemon
+            # still comes up if the remote host is booting behind it.
+            print(f"Remote engine: {self.remote.label} "
+                  f"(model={self.remote.model}) — no local model will be loaded")
+        elif not self.load_model():
             return False
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -314,11 +456,26 @@ def main():
     parser.add_argument("--port", type=int, default=9998)
     parser.add_argument("--model", default="mlx-community/whisper-large-v3-turbo",
                         help="HuggingFace model repo for MLX Whisper")
+    parser.add_argument("--remote-url", default=None,
+                        help="OpenAI-compatible base URL, e.g. http://host:8080/v1. "
+                             "Setting it (or WHISPER_REMOTE_URL) switches the daemon "
+                             "to remote mode: no model is loaded and every "
+                             "transcription is an HTTP call instead")
+    parser.add_argument("--remote-model", default=None,
+                        help="Model id the REMOTE server exposes (or WHISPER_REMOTE_MODEL). "
+                             "Not the same as --model; a router may prefix its upstreams")
+    parser.add_argument("--remote-api-key-env", default=None,
+                        help="Name of the env var holding a bearer token for the remote "
+                             "endpoint (default WHISPER_REMOTE_API_KEY). The token is "
+                             "never passed on the command line")
     parser.add_argument("--idle-timeout", type=int, default=900,
                         help="Auto-shutdown after idle seconds (0 = disabled)")
     args = parser.parse_args()
 
-    daemon = WhisperDaemon(host=args.host, port=args.port, idle_timeout=args.idle_timeout, model=args.model)
+    remote = RemoteEngine(base_url=args.remote_url, model=args.remote_model,
+                          api_key_env=args.remote_api_key_env)
+    daemon = WhisperDaemon(host=args.host, port=args.port, idle_timeout=args.idle_timeout,
+                           model=args.model, remote=remote)
     daemon.start()
 
 
