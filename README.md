@@ -8,6 +8,23 @@ The protocol sibling of [relayTTS](https://github.com/barelyworkingcode/relayTTS
 
 MIT licensed.
 
+## Built on
+
+This daemon is a thin protocol shell. The hard parts belong to other people:
+
+| | |
+|---|---|
+| [MLX](https://github.com/ml-explore/mlx) — Apple (MIT) | the array framework everything here runs on |
+| [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) — Apple (MIT) | Whisper inference on Apple Silicon; the local engine is a wrapper around it |
+| [Whisper](https://github.com/openai/whisper) — OpenAI (MIT) | the model the local engine transcribes with |
+| [Qwen3-ASR](https://huggingface.co/mlx-community/Qwen3-ASR-0.6B-8bit) — Alibaba (Apache-2.0) | what the remote engine points at in practice |
+| [mlx-audio](https://github.com/Blaizzy/mlx-audio) — Prince Canuma (MIT) | STT/TTS model support that remote-side servers build on |
+| [mlx-community](https://huggingface.co/mlx-community) | the MLX conversions of every model above |
+| [soundfile](https://github.com/bastibe/python-soundfile) (BSD-3) · [NumPy](https://numpy.org) (BSD-3) · [FFmpeg](https://ffmpeg.org) | decoding, arrays, and format conversion |
+
+Neither engine reimplements speech recognition. The local one calls mlx-whisper; the remote one calls a server that does the same work elsewhere. What this repo adds is the daemon: a length-prefixed TCP protocol, a warm process, crash supervision, and the choice of where inference happens.
+
+
 ## Requirements
 
 - macOS with Apple Silicon
