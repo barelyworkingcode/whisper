@@ -11,6 +11,7 @@ inside load_model(), so these stay fast and model-free.
 import io
 import json
 import os
+import struct
 import sys
 import urllib.error
 
@@ -224,6 +225,63 @@ def test_daemon_defaults_to_local_engine():
 def test_daemon_takes_the_engine_it_is_given():
     e = RemoteEngine(base_url="http://198.51.100.10:8080/v1", model="up/asr")
     assert relaystt_daemon.RelaySTTDaemon(remote=e).remote.enabled is True
+
+
+# ── framing: probe vs truncation ──────────────────────────────────
+
+class _FakeSock:
+    """Serves a scripted byte stream, then behaves like a closed peer."""
+
+    def __init__(self, data=b""):
+        self._data = data
+
+    def recv(self, n):
+        if not self._data:
+            return b""
+        chunk, self._data = self._data[:n], self._data[n:]
+        return chunk
+
+
+def test_probe_disconnect_is_not_an_error():
+    """A health check opens the port and hangs up without sending. That is
+    normal, and must not surface as an error — noise here buries the truncated
+    request below, which is a real fault."""
+    d = relaystt_daemon.RelaySTTDaemon()
+    try:
+        d._recv_request(_FakeSock(b""))
+    except relaystt_daemon.ClientDisconnected:
+        pass
+    else:
+        raise AssertionError("expected ClientDisconnected for a bare probe")
+
+
+def test_truncated_request_is_still_an_error():
+    """Closing mid-message is data loss and keeps the louder exception."""
+    d = relaystt_daemon.RelaySTTDaemon()
+    # A length header promising 100 bytes, followed by only 3 and a close.
+    payload = struct.pack("!I", 100) + b"abc"
+    try:
+        d._recv_request(_FakeSock(payload))
+    except relaystt_daemon.ClientDisconnected:
+        raise AssertionError("a truncated request must not be treated as a probe")
+    except ConnectionError:
+        pass
+    else:
+        raise AssertionError("expected ConnectionError for a truncated request")
+
+
+def test_header_only_close_is_truncation_not_probe():
+    """Bytes arrived, so the peer did start asking something — the close that
+    follows is truncation even though the payload read saw zero bytes."""
+    d = relaystt_daemon.RelaySTTDaemon()
+    try:
+        d._recv_request(_FakeSock(struct.pack("!I", 50)))
+    except relaystt_daemon.ClientDisconnected:
+        raise AssertionError("a close after the header is truncation, not a probe")
+    except ConnectionError:
+        pass
+    else:
+        raise AssertionError("expected ConnectionError")
 
 
 if __name__ == "__main__":
