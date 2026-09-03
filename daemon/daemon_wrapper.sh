@@ -3,7 +3,7 @@
 
 # Activate conda environment
 CONDA_BASE="$(conda info --base)"
-source "${CONDA_BASE}/bin/activate" whisper
+source "${CONDA_BASE}/bin/activate" relaystt
 
 # Directory of this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,13 +28,13 @@ shutdown() { term=1; [ -n "$child" ] && kill -TERM "$child" 2>/dev/null; }
 trap shutdown TERM INT
 
 while true; do
-    python "$SCRIPT_DIR/whisper_daemon.py" --idle-timeout 0 "$@" &
+    python "$SCRIPT_DIR/relaystt_daemon.py" --idle-timeout 0 "$@" &
     child=$!
     wait "$child"
     code=$?
     if [ "$term" -eq 1 ] || [ "$code" -eq 0 ]; then
         break
     fi
-    echo "whisper daemon exited (code $code) — restarting in 2s" >&2
+    echo "relaystt daemon exited (code $code) — restarting in 2s" >&2
     sleep 2
 done

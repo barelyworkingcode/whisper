@@ -105,13 +105,13 @@ This is for running the daemon on a machine too small to hold the weights — a 
 ```bash
 ./setup_env.sh --remote     # soundfile + numpy only, no mlx-whisper
 
-WHISPER_REMOTE_URL=http://<router>:<port>/v1 WHISPER_REMOTE_MODEL=<id-that-server-exposes> ./build.sh
+RELAYSTT_REMOTE_URL=http://<router>:<port>/v1 RELAYSTT_REMOTE_MODEL=<id-that-server-exposes> ./build.sh
 ```
 
 Or directly:
 
 ```bash
-python daemon/whisper_daemon.py   --remote-url http://<router>:<port>/v1   --remote-model <id-that-server-exposes>
+python daemon/relaystt_daemon.py   --remote-url http://<router>:<port>/v1   --remote-model <id-that-server-exposes>
 ```
 
 Notes:

@@ -2,7 +2,7 @@
 """Unit tests for the parts of the STT daemon that don't need a model: remote
 engine configuration, request shape, and error handling.
 
-Runs under pytest, or standalone (`python daemon/test_whisper.py`) — the
+Runs under pytest, or standalone (`python daemon/test_relaystt.py`) — the
 standalone runner skips anything needing a fixture and says how many.
 
 Importing whisper_daemon pulls in nothing heavy: mlx-whisper is imported lazily
@@ -21,8 +21,8 @@ except ImportError:  # the fallback runner at the bottom covers this
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import whisper_daemon
-from whisper_daemon import RemoteEngine
+import relaystt_daemon
+from relaystt_daemon import RemoteEngine
 
 
 class _FakeResponse:
@@ -50,7 +50,7 @@ def _capture(monkeypatch, body=b'{"text":"hello there","language":"english"}'):
         seen["method"] = req.get_method()
         return _FakeResponse(body)
 
-    monkeypatch.setattr(whisper_daemon.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(relaystt_daemon.urllib.request, "urlopen", fake_urlopen)
     return seen
 
 
@@ -80,8 +80,8 @@ def test_trailing_slash_does_not_double_up():
 
 
 def test_env_overrides_arguments(monkeypatch):
-    monkeypatch.setenv("WHISPER_REMOTE_URL", "http://host:9999/v1")
-    monkeypatch.setenv("WHISPER_REMOTE_MODEL", "env/model")
+    monkeypatch.setenv("RELAYSTT_REMOTE_URL", "http://host:9999/v1")
+    monkeypatch.setenv("RELAYSTT_REMOTE_MODEL", "env/model")
     e = RemoteEngine(base_url="http://ignored:1/v1", model="ignored")
     assert e.url.startswith("http://host:9999/v1")
     assert e.model == "env/model"
@@ -93,7 +93,7 @@ def test_enabled_without_model_is_fatal():
     try:
         RemoteEngine(base_url="http://198.51.100.10:8080/v1")
     except ValueError as e:
-        assert "WHISPER_REMOTE_MODEL" in str(e)
+        assert "RELAYSTT_REMOTE_MODEL" in str(e)
     else:
         raise AssertionError("expected ValueError for remote without a model")
 
@@ -143,7 +143,7 @@ def test_bearer_sent_only_when_configured(tmp_path, monkeypatch):
     e.transcribe(_wav(tmp_path))
     assert not any(k.lower() == "authorization" for k in seen["headers"])
 
-    monkeypatch.setenv("WHISPER_REMOTE_API_KEY", "tok")
+    monkeypatch.setenv("RELAYSTT_REMOTE_API_KEY", "tok")
     e2 = RemoteEngine(base_url="http://198.51.100.10:8080/v1", model="up/asr")
     seen2 = _capture(monkeypatch)
     e2.transcribe(_wav(tmp_path))
@@ -160,7 +160,7 @@ def test_http_error_names_endpoint_and_reason(tmp_path, monkeypatch):
             req.full_url, 400, "Bad Request", {},
             io.BytesIO(b'{"error":{"message":"unknown model"}}'))
 
-    monkeypatch.setattr(whisper_daemon.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(relaystt_daemon.urllib.request, "urlopen", boom)
     try:
         e.transcribe(_wav(tmp_path))
     except RuntimeError as err:
@@ -176,7 +176,7 @@ def test_unreachable_error_is_actionable(tmp_path, monkeypatch):
     def boom(req, timeout=None):
         raise urllib.error.URLError("Connection refused")
 
-    monkeypatch.setattr(whisper_daemon.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(relaystt_daemon.urllib.request, "urlopen", boom)
     try:
         e.transcribe(_wav(tmp_path))
     except RuntimeError as err:
@@ -218,12 +218,12 @@ def test_error_detail_unwraps_common_shapes():
 # ── daemon wiring ────────────────────────────────────────────────
 
 def test_daemon_defaults_to_local_engine():
-    assert whisper_daemon.WhisperDaemon().remote.enabled is False
+    assert relaystt_daemon.RelaySTTDaemon().remote.enabled is False
 
 
 def test_daemon_takes_the_engine_it_is_given():
     e = RemoteEngine(base_url="http://198.51.100.10:8080/v1", model="up/asr")
-    assert whisper_daemon.WhisperDaemon(remote=e).remote.enabled is True
+    assert relaystt_daemon.RelaySTTDaemon(remote=e).remote.enabled is True
 
 
 if __name__ == "__main__":

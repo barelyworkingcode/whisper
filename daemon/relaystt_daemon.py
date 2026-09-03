@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Whisper STT Daemon Server
+relaySTT Daemon Server
 Keeps Whisper model loaded in memory with Apple Silicon MLX acceleration.
 Accepts base64-encoded audio and returns transcribed text in JSON responses.
 """
@@ -42,18 +42,18 @@ class RemoteEngine:
     """
 
     def __init__(self, base_url=None, model=None, api_key_env=None, timeout=120.0):
-        self.base_url = (os.environ.get("WHISPER_REMOTE_URL") or base_url or "").rstrip("/")
+        self.base_url = (os.environ.get("RELAYSTT_REMOTE_URL") or base_url or "").rstrip("/")
         # A URL is the whole switch: there is no separate enable flag to get out
         # of sync with it.
         self.enabled = bool(self.base_url)
-        self.model = os.environ.get("WHISPER_REMOTE_MODEL") or model or ""
+        self.model = os.environ.get("RELAYSTT_REMOTE_MODEL") or model or ""
         self.timeout = timeout
-        self.api_key = os.environ.get(api_key_env or "WHISPER_REMOTE_API_KEY") or None
+        self.api_key = os.environ.get(api_key_env or "RELAYSTT_REMOTE_API_KEY") or None
 
         if self.enabled and not self.model:
             raise ValueError(
                 "remote mode needs a model id: pass --remote-model or set "
-                "WHISPER_REMOTE_MODEL to the id the remote server exposes")
+                "RELAYSTT_REMOTE_MODEL to the id the remote server exposes")
 
     @property
     def url(self):
@@ -146,7 +146,7 @@ class RemoteEngine:
         return result
 
 
-class WhisperDaemon:
+class RelaySTTDaemon:
     def __init__(self, host="localhost", port=9998, idle_timeout=900,
                  model="mlx-community/whisper-large-v3-turbo", remote=None):
         self.host = host
@@ -414,7 +414,7 @@ class WhisperDaemon:
         self.sock.listen(5)
         self.running = True
 
-        print(f"Whisper STT Daemon started on {self.host}:{self.port}")
+        print(f"relaySTT Daemon started on {self.host}:{self.port}")
         if self.idle_timeout > 0:
             print(f"Auto-shutdown after {self.idle_timeout // 60} minutes idle")
         else:
@@ -451,22 +451,22 @@ class WhisperDaemon:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Whisper STT Daemon")
+    parser = argparse.ArgumentParser(description="relaySTT Daemon")
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--port", type=int, default=9998)
     parser.add_argument("--model", default="mlx-community/whisper-large-v3-turbo",
                         help="HuggingFace model repo for MLX Whisper")
     parser.add_argument("--remote-url", default=None,
                         help="OpenAI-compatible base URL, e.g. http://host:8080/v1. "
-                             "Setting it (or WHISPER_REMOTE_URL) switches the daemon "
+                             "Setting it (or RELAYSTT_REMOTE_URL) switches the daemon "
                              "to remote mode: no model is loaded and every "
                              "transcription is an HTTP call instead")
     parser.add_argument("--remote-model", default=None,
-                        help="Model id the REMOTE server exposes (or WHISPER_REMOTE_MODEL). "
+                        help="Model id the REMOTE server exposes (or RELAYSTT_REMOTE_MODEL). "
                              "Not the same as --model; a router may prefix its upstreams")
     parser.add_argument("--remote-api-key-env", default=None,
                         help="Name of the env var holding a bearer token for the remote "
-                             "endpoint (default WHISPER_REMOTE_API_KEY). The token is "
+                             "endpoint (default RELAYSTT_REMOTE_API_KEY). The token is "
                              "never passed on the command line")
     parser.add_argument("--idle-timeout", type=int, default=900,
                         help="Auto-shutdown after idle seconds (0 = disabled)")
@@ -474,7 +474,7 @@ def main():
 
     remote = RemoteEngine(base_url=args.remote_url, model=args.remote_model,
                           api_key_env=args.remote_api_key_env)
-    daemon = WhisperDaemon(host=args.host, port=args.port, idle_timeout=args.idle_timeout,
+    daemon = RelaySTTDaemon(host=args.host, port=args.port, idle_timeout=args.idle_timeout,
                            model=args.model, remote=remote)
     daemon.start()
 

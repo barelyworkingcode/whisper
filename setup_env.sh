@@ -1,5 +1,5 @@
 #!/bin/bash
-# Setup conda environment for Whisper STT daemon
+# Setup conda environment for the relaySTT daemon
 set -euo pipefail
 
 #
@@ -14,7 +14,7 @@ set -euo pipefail
 #
 # Both modes build the same env name, since daemon_wrapper.sh activates it by
 # name; switching modes means rebuilding the env.
-ENV_NAME="whisper"
+ENV_NAME="relaystt"
 CONDA_BASE="$(conda info --base)"
 
 REMOTE=0
