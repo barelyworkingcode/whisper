@@ -1,8 +1,12 @@
-# Whisper STT Daemon
+# relaySTT
 
-A local speech-to-text daemon that keeps a Whisper model loaded in memory with Apple Silicon MLX acceleration. Send base64-encoded audio over TCP and get back transcribed text as JSON.
+A local speech-to-text daemon. Send base64-encoded audio over TCP, get transcribed text back as JSON.
 
-Uses [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) for fast inference on Apple Silicon. Default model: `mlx-community/whisper-large-v3-turbo`.
+Two engines, same protocol. **Local** keeps a Whisper model resident with Apple Silicon MLX acceleration via [mlx-whisper](https://github.com/ml-explore/mlx-examples/tree/main/whisper) (default `mlx-community/whisper-large-v3-turbo`). **Remote** loads no model at all and calls an OpenAI-compatible server instead — see [Remote inference](#remote-inference).
+
+The protocol sibling of [relayTTS](https://github.com/barelyworkingcode/relayTTS): same length-prefixed JSON framing, adjacent port, same wrapper and remote-engine shape.
+
+MIT licensed.
 
 ## Requirements
 
